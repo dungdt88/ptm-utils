@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ptm-utils"
+version = "0.1.0"
+description = "Personal task management CLI on top of Obsidian vaults"
+readme = "README.md"
+requires-python = ">=3.11"
+license = "MIT"
+keywords = ["obsidian", "markdown", "tasks", "notes", "cli", "productivity"]
+dependencies = [
+    "PyYAML",
+    "python-dotenv",
+]
+
+[project.scripts]
+ptmutils = "ptm.ptmutils:main"
+
+[dependency-groups]
+dev = [
+    "pre-commit",
+    "pytest",
+    "coverage",
+    "ruff",
+]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["ptm*"]
+
+[tool.ruff]
+target-version = "py311"
+line-length = 88
+exclude = [".git", ".env", ".venv", "venv", "__pycache__", "*.pyc"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I"]
+ignore = ["E501"]
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.isort]
+known-first-party = ["ptm", "tests"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+line-ending = "auto"
+docstring-code-format = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

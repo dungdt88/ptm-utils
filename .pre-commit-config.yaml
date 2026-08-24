@@ -1,0 +1,17 @@
+repos:
+  - repo: local
+    hooks:
+      - id: format-python-code
+        name: Format Python Code with Ruff
+        entry: ruff format --config pyproject.toml src tests
+        files: \.py$
+        language: system
+        stages: [pre-commit]
+
+      - id: lint-python-code
+        name: Lint Python Code with Ruff
+        entry: ruff check .
+        files: \.py$
+        language: system
+        pass_filenames: false
+        stages: [pre-commit]
