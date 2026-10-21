@@ -12,6 +12,9 @@
 - **One page per month.** Inside a vault, `notes/2026-08.md` is *"my August
   page"*. Tasks live in a `## Tasks` section at the top; notes are appended to a
   dated `## Log` below.
+- **One note per yearly goal.** `goals/2026/Plan for living abroad.md`, with a
+  status, milestones and a dated progress log, plus an Obsidian Bases table per
+  year — the Notion-database way of keeping new-year resolutions.
 - **The files are the state.** No database, no index. Edit anything by hand in
   Obsidian and the CLI reads it back.
 
@@ -59,6 +62,9 @@ PTM_DEFAULT_CONTEXT=nf
 
 # Month-page folder inside each vault
 PTM_NOTES_DIR=notes
+
+# Goals folder inside each vault
+PTM_GOALS_DIR=goals
 ```
 
 The registry itself is YAML, managed by `ptmutils context`:
@@ -81,13 +87,17 @@ With exactly one context registered, it is the default automatically.
 ```
 ~/Documents/vaults/work/          # one context = one vault
 ├── _ptm_dashboard.md                  # written by `ptmutils init`
-└── notes/
-    ├── 2026-08.md                     # this month
-    └── 2026-07.md
+├── notes/
+│   ├── 2026-08.md                     # this month
+│   └── 2026-07.md
+└── goals/
+    ├── 2026.base                      # the year's goal table (Obsidian Bases)
+    ├── 2026/                          # one note per goal
+    └── _templates/goal.md             # for creating goals by hand
 ```
 
-`ptmutils` owns `notes/*.md` and `_ptm_dashboard.md`. Everything else in the vault is
-yours and is never touched. See [vault_layout.md](./vault_layout.md) for the page
+`ptmutils` owns `notes/*.md`, `_ptm_dashboard.md` and `goals/`. Everything else
+in the vault is yours and is never touched. See [vault_layout.md](./vault_layout.md) for the page
 format and the Dataview queries.
 
 ## Commands
@@ -202,6 +212,62 @@ Open tasks are appended to the target page **keeping their id**, tagged
 Obsidian's "forwarded" checkbox, so it reads as handled without counting as
 done. Done tasks stay put. Running it twice is safe.
 
+### `goal` — yearly goals
+
+A year's resolutions, one note each in `goals/YYYY/`, viewed as a table through
+`goals/YYYY.base`. Each context keeps its own: work goals in the work vault,
+personal ones in the personal vault.
+
+```bash
+ptmutils goal init --all --year next            # folder, table and template for next year
+ptmutils goal add "Plan for living abroad" -c priv --area family --year next \
+  --description "Decide by summer whether we move" \
+  --milestone "Shortlist cities" --milestone "Visit schools"
+ptmutils goal log abroad "Shortlisted Melbourne, Lisbon, Tokyo"
+ptmutils goal check abroad "shortlist"
+ptmutils goal milestone abroad "Talk to an immigration lawyer"
+ptmutils goal status abroad done
+ptmutils goal show abroad --json
+```
+
+| Subcommand | What it does |
+| --- | --- |
+| `init` | Create `goals/YYYY/`, `goals/YYYY.base` and `goals/_templates/goal.md`. Keeps existing files unless `--force`. Takes `--all`. |
+| `add TITLE` | Create a goal note and print its `g-xxxxx` id. Creates the year's folder and `.base` if missing. |
+| `show GOAL` | Print the note; `--json` gives fields, milestones and progress. |
+| `log GOAL TEXT` | Append `- YYYY-MM-DD — TEXT` to `## Progress`. A `not-started` goal becomes `in-progress`. |
+| `status GOAL STATUS` | Set `not-started`, `in-progress` or `done`. |
+| `milestone GOAL TEXT` | Append `- [ ] TEXT` to `## Milestones`. |
+| `check` / `uncheck GOAL MILESTONE` | Tick or untick the milestone whose text contains `MILESTONE`. |
+
+`GOAL` is an id (`g-4be07`) or the title, or part of it, in `--year` (default
+this year). An ambiguous match is an error that lists the candidates.
+
+| Option | Applies to | Description |
+| --- | --- | --- |
+| `--context`, `-c` | all | Context slug. Lookups search every context when omitted. |
+| `--year` | all | `YYYY`, `this`, `last`, `next`, `+/-N` (default this year) |
+| `--area` | `add` | One label, e.g. `family`, `mika` |
+| `--description` | `add` | Description Markdown; `-` reads stdin |
+| `--milestone` | `add` | A milestone; repeatable |
+| `--status` | `add` | Starting status (default `not-started`) |
+| `--date` | `add`, `log` | Created / entry date (default today) |
+| `--force` | `init` | Overwrite the `.base` and the template |
+| `--dry-run` | writes | Print what would be written; write nothing |
+| `--json` | all | Emit JSON |
+
+### `goals` — list a year's goals
+
+```bash
+ptmutils goals                       # this year, default context
+ptmutils goals --all                 # every context
+ptmutils goals --year last --status done
+ptmutils goals --all --area family --json
+```
+
+Shows id, status, title, area, milestones done (`2/5`) and the date of the last
+progress entry.
+
 ### `page` — read or locate a month page
 
 ```bash
@@ -215,7 +281,7 @@ ptmutils page --month next --create
 
 ```bash
 ptmutils contexts                     # slug, name, month count, open tasks
-ptmutils context add <slug> --vault DIR --name NAME [--default]
+ptmutils context add <slug> --vault DIR --name NAME [--default] [--goals-dir DIR]
 ptmutils context remove <slug>        # forgets it; the vault is untouched
 ptmutils context default <slug>
 ptmutils vault --all                  # resolved paths and statistics
@@ -243,6 +309,12 @@ ptmutils note --title "Shipped the export pipeline" \
 ptmutils tasks --all --due-before +7
 ```
 
+**Progress on a resolution** — something moved on one of this year's goals:
+
+```bash
+ptmutils goal log robots "First line-follower runs on its own"
+```
+
 **End of month** — close it out and carry the rest forward:
 
 ```bash
@@ -261,8 +333,12 @@ Or let the agent skills do it: `/ptm-capture`, `/ptm-review`, `/ptm-plan-day`,
   `done <id>` until you add one.
 - **Concurrency-safe.** Every page write takes an exclusive `flock`, so two
   agent sessions writing at once produce two entries, never a lost one.
-- **Append-first.** Only `done`, `undone` and `rollover` modify an existing line.
-  Note entries are never edited or deleted by the tool.
+- **Append-first.** Only `done`, `undone` and `rollover` modify an existing line
+  on a month page; on a goal note only `status:` and milestone checkboxes are
+  edited in place. Note entries and progress lines are never edited or deleted
+  by the tool.
+- **Goals start fresh each year.** Nothing is carried from one year's plan into
+  the next; `goal add` the ones you are keeping.
 - **Local only.** Syncing vaults (git, iCloud, Obsidian Sync) is your choice.
 
 ## Related

@@ -4,7 +4,8 @@
 `ptmutils`, that reads and writes plain Markdown inside Obsidian vaults. One
 vault per **context** (work, private, …), one Markdown page per **month** inside
 it, with checklist tasks in a `## Tasks` section and timestamped notes in a
-`## Log` section. It is fully offline — no credentials, no network calls, no
+`## Log` section. Yearly goals live beside the months, one note per goal in
+`goals/YYYY/` with an Obsidian Bases table per year. It is fully offline — no credentials, no network calls, no
 external service. Issue trackers are deliberately out of scope; a separate tool
 covers those, and this repo does not duplicate it.
 
@@ -83,12 +84,13 @@ ptm-utils/
 ├── pyproject.toml            # deps, console script, ruff and pytest config
 ├── docs/
 │   ├── ptmutils.md           # full command reference
-│   └── vault_layout.md       # the Obsidian side: pages, Dataview, dashboard
+│   └── vault_layout.md       # the Obsidian side: pages, goals, Dataview, Bases
 ├── skills/                   # agent skills, symlinked into ~/.claude/skills by install.sh
 │   ├── ptm-capture/          # "add this as a task/note"
 │   ├── ptm-review/           # "what's open?", "review my month"
 │   ├── ptm-plan-day/         # "plan my day"
-│   └── ptm-monthly-rollover/ # end-of-month close and carry-over
+│   ├── ptm-monthly-rollover/ # end-of-month close and carry-over
+│   └── ptm-year-plan/        # write a new year's goals
 ├── src/ptm/
 │   ├── ptmutils.py           # the whole CLI — one self-contained module
 │   └── specs.md              # THE SPEC: page format, commands, contracts
@@ -113,8 +115,10 @@ change — if code and spec disagree, that is a bug.
 
 The contracts in the spec are **stable**: the page frontmatter keys, the
 `## Tasks` / `## Log` section headings, the `[key:: value]` inline-field form,
-the `[ ]` / `[x]` / `[>]` checkbox states, the `t-xxxxx` id shape, and the
-rollover semantics. Real vaults on disk depend on all of them.
+the `[ ]` / `[x]` / `[>]` checkbox states, the `t-xxxxx` id shape, the
+rollover semantics, and the goal note's properties, `## Description` /
+`## Milestones` / `## Progress` sections and `- YYYY-MM-DD — text` progress
+lines. Real vaults on disk depend on all of them.
 
 ## Code Style & Conventions
 
@@ -147,10 +151,14 @@ rollover semantics. Real vaults on disk depend on all of them.
   Never open a page file for writing directly.
 - Parsers must tolerate hand-edited files: unknown lines are ignored, never
   rejected and never rewritten.
-- Only `done`, `undone` and `rollover` may modify an existing line. Everything
-  else appends.
-- Never write anywhere in a vault other than `notes/YYYY-MM.md` and
-  `_ptm_dashboard.md`.
+- Only `done`, `undone` and `rollover` may modify an existing month-page line;
+  on a goal note only `goal status`/`goal log` (the `status:` line) and
+  `goal check`/`goal uncheck` (a milestone box) may. Everything else appends.
+- Edit frontmatter line by line (`set_frontmatter_value`), never by
+  re-serialising YAML — that would reorder and reformat the user's properties.
+- Never write anywhere in a vault other than `notes/YYYY-MM.md`,
+  `_ptm_dashboard.md` and the goals files (`goals/YYYY/*.md`,
+  `goals/YYYY.base`, `goals/_templates/goal.md`).
 
 <!-- nf:code-comments v1 — managed by nf-init-project -->
 ## Code comments
@@ -247,8 +255,8 @@ better comments.
 
 ## Do NOT
 
-- Do NOT write anywhere in a user's vault except `notes/YYYY-MM.md` and
-  `_ptm_dashboard.md`.
+- Do NOT write anywhere in a user's vault except `notes/YYYY-MM.md`,
+  `_ptm_dashboard.md` and the goals files under `goals/`.
 - Do NOT delete or rewrite a note entry — the tool appends; humans edit in
   Obsidian.
 - Do NOT change the page format, the checkbox states or the task-id shape

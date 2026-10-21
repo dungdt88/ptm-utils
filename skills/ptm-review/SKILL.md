@@ -3,10 +3,11 @@ name: ptm-review
 description: >-
   Use when the user wants to see their personal task vault read back — "what's
   open?", "what's overdue?", "review my month", "what did I get done in August",
-  "còn việc gì chưa xong". Reads open tasks and the month's log across one or all
-  contexts with `ptmutils tasks` and `ptmutils digest`, then presents a grouped,
-  prioritised picture: what is overdue, what is due soon, what has gone stale,
-  and what actually got finished. Read-only by default — it proposes changes and
+  "còn việc gì chưa xong", "how are my goals this year". Reads open tasks and the
+  month's log across one or all contexts with `ptmutils tasks` and
+  `ptmutils digest`, and the year's goals with `ptmutils goals`, then presents a
+  grouped, prioritised picture: what is overdue, what is due soon, what has gone
+  stale, what actually got finished, and where each yearly goal stands. Read-only by default — it proposes changes and
   asks before writing anything.
 ---
 
@@ -32,6 +33,7 @@ Then decide what the user meant:
 | "what's open for work?" | that context (`-c nf`) |
 | "review my month" | the current month, every context |
 | "how was August?" | `--month 2026-08` |
+| "how are my goals?", "review my year" | `ptmutils goals --all` (§ Goals) |
 
 When in doubt, go wider — `--all`. An extra context in the output costs a line;
 a missing one costs a missed deadline.
@@ -93,6 +95,22 @@ id — it is what the user types to close something.
 For "what did I get done", lead with the **done** list from the digest and keep
 the open list short; that is a different question.
 
+### Goals
+
+For a goals question, read the year rather than the month:
+
+```bash
+ptmutils goals --all --json                  # this year
+ptmutils goals --all --year last --json      # "how did 2025 go?"
+ptmutils goal show <id> --json               # one goal's description and progress
+```
+
+Present per context: done, in progress, not started. For each goal give the
+milestone count and the date of the last progress entry. **A goal in progress
+with no entry for three months or more is the signal worth naming**, once — the
+same way a twice-carried task is. In a monthly review, add one line per context
+on the goals ("3 of 7 goals in progress, 1 done") rather than the full list.
+
 ### 5. Offer, do not act
 
 End with concrete suggestions tied to real ids, and let the user choose:
@@ -101,7 +119,8 @@ End with concrete suggestions tied to real ids, and let the user choose:
   date?"
 - "Three tasks are overdue in Work. Want me to close any of them?"
 
-Only run `ptmutils done`, `undone` or `rollover` when the user says so. The one
+Only run `ptmutils done`, `undone`, `rollover` or any `goal` write when the user
+says so. The one
 exception is an explicit instruction in the same breath ("review my month and
 close anything I've already finished") — and even then, list what you are about
 to close first.

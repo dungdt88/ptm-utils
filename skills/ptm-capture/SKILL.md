@@ -3,10 +3,11 @@ name: ptm-capture
 description: >-
   Use when the user wants something written into their personal task-management
   vault — "add a task", "note this down", "remind me to …", "ghi chú lại", "log
-  this to my notes". Turns loose conversation into well-formed entries on the
-  right month page of the right context: checklist items via `ptmutils task`,
-  timestamped notes via `ptmutils note`. Decides task-vs-note from what the thing
-  actually is, picks the context from the conversation and confirms when it is
+  this to my notes", "log progress on my robots goal". Turns loose conversation
+  into well-formed entries in the right context: checklist items via
+  `ptmutils task`, timestamped notes via `ptmutils note`, and progress on a
+  yearly goal via `ptmutils goal log` / `goal check`. Decides task-vs-note-vs-goal
+  from what the thing actually is, picks the context from the conversation and confirms when it is
   ambiguous, and never invents work the user did not describe.
 ---
 
@@ -45,6 +46,19 @@ tasks each has. If nothing is registered, tell the user to run
 
 Both, sometimes: a meeting produces a note *and* the actions from it. Capture
 both; do not force one into the other.
+
+It is **goal progress** when the user ties it to one of this year's resolutions
+— "progress on the robots goal", "for my living-abroad plan, we shortlisted…",
+"tick off payroll on the Mika ops goal". Check the goals first:
+
+```bash
+ptmutils goals --all --json
+```
+
+If the thing clearly advances one listed goal, record it there. If it only
+*might* relate to a goal, ask — or capture it as a task or note as usual. Never
+create a new goal from a passing remark; new goals come from the user deciding
+on one (`ptm-year-plan`).
 
 ### 3. Pick the context
 
@@ -89,6 +103,23 @@ ptmutils note --title "Sprint planning" -c nf \
   what was rejected and why. This is where the value is.
 - `--date yesterday` when the user is recording something from an earlier day.
 
+**Goal progress:**
+
+```bash
+ptmutils goal log robots "First line-follower runs on its own" -c priv
+ptmutils goal check "operation" "payroll" -c priv      # a milestone is finished
+ptmutils goal milestone abroad "Talk to an immigration lawyer" -c priv
+```
+
+- `goal log` takes the goal's id or part of its title; an ambiguous match fails
+  and lists candidates — pick one with the user, then use its id.
+- One line, the user's words, past tense. It goes under `## Progress` with
+  today's date; `--date` when it happened earlier.
+- `goal check` only when the user says the milestone is done. Logging progress
+  does not tick milestones.
+- Never change a goal's `status` as a side effect of capture. (`goal log` moves a
+  `not-started` goal to `in-progress` by itself; say so in the report.)
+
 **Several things at once?** One command each. Batch them in a single message,
 then report the whole set.
 
@@ -122,7 +153,7 @@ it prints the exact Markdown line without writing it.
 - **Never invent a due date or a priority.** Absent is a valid value.
 - **Never guess a context** when two plausibly fit — ask.
 - **Never edit or delete an existing note entry.** Add a new one.
-- **Never write outside `notes/YYYY-MM.md`** in the vault.
+- **Never write outside `notes/YYYY-MM.md` and the goal notes** in the vault.
 - Keep the user's own words. You are transcribing, not drafting.
 
 ## Related

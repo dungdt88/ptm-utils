@@ -9,6 +9,9 @@ in whatever repo you happen to be in.
   vaults, so they sync separately and never cross-link by accident.
 - **One page per month.** `notes/2026-08.md` is *"my August page"*. Checklist
   tasks in a `## Tasks` section, timestamped notes in a `## Log` below.
+- **One note per yearly goal.** New-year resolutions live in `goals/2026/`,
+  each with a status, milestones and a dated progress log, shown as a table by
+  Obsidian's built-in Bases — a Notion database, in plain Markdown.
 - **Plain Markdown, no database.** Edit anything by hand in Obsidian; the CLI
   reads it straight back.
 - **Offline.** No credentials, no network, no telemetry.
@@ -61,6 +64,11 @@ ptmutils done t-da621
 # End of month
 ptmutils rollover --all --dry-run
 ptmutils rollover --all
+
+# Yearly goals
+ptmutils goal add "Plan for living abroad" -c priv --area family --year next
+ptmutils goal log abroad "Shortlisted three cities"
+ptmutils goals --all
 ```
 
 Every read command takes `--json`. Every write command takes `--dry-run`.
@@ -100,8 +108,9 @@ Decided to defer the rewrite to September.
 checkbox — a task carried into a later month reads as handled without counting
 as done.
 
-`ptmutils` owns only `notes/YYYY-MM.md` and `_ptm_dashboard.md`. The rest of the
-vault is yours.
+`ptmutils` owns only `notes/YYYY-MM.md`, `_ptm_dashboard.md` and `goals/`. The
+rest of the vault is yours. Goals are covered in
+[`docs/vault_layout.md`](./docs/vault_layout.md#yearly-goals).
 
 ## Agent skills
 
@@ -113,6 +122,7 @@ Installed into `~/.claude/skills/`, so they work from any repo:
 | `ptm-review` | "what's open?", "what's overdue?", "review my month" |
 | `ptm-plan-day` | "plan my day", "what should I work on" |
 | `ptm-monthly-rollover` | "close out August", "roll over to September" |
+| `ptm-year-plan` | "plan my 2027 goals", "set my new year resolutions" |
 
 ## Command reference
 
@@ -130,6 +140,8 @@ Installed into `~/.claude/skills/`, so they work from any repo:
 | `search` | Find notes and tasks |
 | `digest` | Summarise a period, per context |
 | `rollover` | Carry open tasks into the next month |
+| `goal init\|add\|show\|log\|status\|milestone\|check\|uncheck` | Yearly goals, one note each |
+| `goals` | List a year's goals with status and progress |
 
 Full detail in [`docs/ptmutils.md`](./docs/ptmutils.md).
 
@@ -142,6 +154,7 @@ upwards, then next to the module, then `~/.config/ptm/ptm.env`:
 PTM_CONTEXTS_FILE=~/.config/ptm/contexts.yaml
 PTM_DEFAULT_CONTEXT=nf
 PTM_NOTES_DIR=notes
+PTM_GOALS_DIR=goals
 ```
 
 The context registry is YAML, managed by `ptmutils context`:
