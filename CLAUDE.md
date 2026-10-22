@@ -10,7 +10,8 @@ Full coding agent instructions are in [`AGENTS.md`](./AGENTS.md). Key points are
 that reads and writes plain Markdown inside Obsidian vaults. One vault per
 **context** (work, private, …), one page per **month** inside it, with checklist
 tasks in a `## Tasks` section and timestamped notes in a `## Log` section.
-Fully offline — no credentials, no network, no issue-tracker integration.
+Yearly goals sit beside the months: one note per goal in `goals/YYYY/`, viewed
+through an Obsidian Bases table. Fully offline — no credentials, no network, no issue-tracker integration.
 
 ## Commands
 
@@ -57,7 +58,8 @@ uv pip install --python .venv/bin/python -e .
 
 ## Do NOT
 
-- Do NOT write anywhere in a user's vault except `notes/YYYY-MM.md` and `_ptm_dashboard.md`.
+- Do NOT write anywhere in a user's vault except `notes/YYYY-MM.md`, `_ptm_dashboard.md`
+  and the goals files (`goals/YYYY/*.md`, `goals/YYYY.base`, `goals/_templates/goal.md`).
 - Do NOT change the page format, checkbox states, or task-id shape without
   updating `specs.md` and thinking about existing vaults.
 - Do NOT add a network call, a credential, or a Jira/Confluence integration.

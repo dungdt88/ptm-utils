@@ -12,6 +12,7 @@ Each folder here is an agent skill: a `SKILL.md` telling an AI agent how to driv
 | [`ptm-review`](./ptm-review/SKILL.md) | "what's open?", "what's overdue?", "review my month" |
 | [`ptm-plan-day`](./ptm-plan-day/SKILL.md) | "plan my day", "what should I work on" |
 | [`ptm-monthly-rollover`](./ptm-monthly-rollover/SKILL.md) | "close out August", "roll over to September" |
+| [`ptm-year-plan`](./ptm-year-plan/SKILL.md) | "plan my 2027 goals", "set my new year resolutions" |
 
 They share three principles:
 
@@ -24,7 +25,7 @@ They share three principles:
 
 ## Writing a new one
 
-Follow the shape of the existing four: YAML frontmatter with `name` and a
+Follow the shape of the existing ones: YAML frontmatter with `name` and a
 `description` that says *when to use it* (that is what an agent matches on),
 then a numbered workflow, then hard rules. Keep the CLI calls copy-pasteable and
 real — check them against [`docs/ptmutils.md`](../docs/ptmutils.md).

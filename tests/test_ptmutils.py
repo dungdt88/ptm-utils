@@ -244,3 +244,224 @@ def test_hand_edited_tasks_are_parsed_back(vaults, tmp_path):
 def test_unknown_context_fails_cleanly(vaults, capsys):
     assert ptmutils.main(["tasks", "-c", "nope"]) == 1
     assert "Unknown context" in capsys.readouterr().err
+
+
+# --------------------------------------------------------------------------- #
+# Goals
+# --------------------------------------------------------------------------- #
+
+
+def goal_path(root, title, context="nf", year=None):
+    year = year or str(date.today().year)
+    return root / context / "goals" / year / f"{title}.md"
+
+
+@pytest.mark.parametrize(
+    "value,expected",
+    [
+        (None, date.today().year),
+        ("next", date.today().year + 1),
+        ("last", date.today().year - 1),
+        ("-2", date.today().year - 2),
+        ("2030", 2030),
+    ],
+)
+def test_parse_year_shorthands(value, expected):
+    assert ptmutils.parse_year(value) == str(expected)
+
+
+def test_parse_year_rejects_nonsense():
+    with pytest.raises(ptmutils.PtmError):
+        ptmutils.parse_year("26")
+
+
+def test_goal_title_drops_characters_obsidian_cannot_name_a_file_with():
+    assert (
+        ptmutils.goal_title("[Mika] Ops: payroll / stock?") == "Mika Ops payroll stock"
+    )
+    with pytest.raises(ptmutils.PtmError):
+        ptmutils.goal_title("[]")
+
+
+def test_set_frontmatter_value_keeps_hand_added_properties():
+    lines = ["---", "status: done", "mood: great", "---", "# Goal"]
+    assert ptmutils.set_frontmatter_value(lines, "status", "in-progress") == [
+        "---",
+        "status: in-progress",
+        "mood: great",
+        "---",
+        "# Goal",
+    ]
+
+
+def test_goal_add_writes_the_note_and_the_year_view(vaults, tmp_path):
+    out = vaults(
+        "goal",
+        "add",
+        "Improve operations",
+        "--area",
+        "mika",
+        "--description",
+        "Make operations delegable",
+        "--milestone",
+        "Payroll",
+        "--milestone",
+        "Stock",
+    )
+    goal_id = out.split()[0]
+    assert goal_id.startswith("g-")
+
+    note = goal_path(tmp_path, "Improve operations").read_text()
+    assert f"type: {ptmutils.GOAL_TYPE}" in note
+    assert f"id: {goal_id}" in note
+    assert "status: not-started" in note
+    assert "area: mika" in note
+    assert "Make operations delegable" in note
+    assert "- [ ] Payroll\n- [ ] Stock" in note
+    assert ptmutils.PROGRESS_HEADING in note
+
+    year = date.today().year
+    base = (tmp_path / "nf" / "goals" / f"{year}.base").read_text()
+    assert f'file.inFolder("goals/{year}")' in base
+
+
+def test_goal_add_refuses_to_overwrite_a_goal(vaults, tmp_path, capsys):
+    vaults("goal", "add", "Learn to sail")
+    assert ptmutils.main(["goal", "add", "Learn to sail"]) == 1
+    assert "already exists" in capsys.readouterr().err
+
+
+def test_goal_add_dry_run_writes_nothing(vaults, tmp_path):
+    out = vaults("goal", "add", "Not real", "--dry-run")
+    assert "# Not real" in out
+    assert not (tmp_path / "nf" / "goals").exists()
+
+
+def test_goal_add_lands_in_the_requested_year(vaults, tmp_path):
+    vaults("goal", "add", "Next year's plan", "--year", "next")
+    next_year = str(date.today().year + 1)
+    assert goal_path(tmp_path, "Next year's plan", year=next_year).exists()
+
+
+def test_goal_log_appends_progress_and_starts_the_goal(vaults, tmp_path):
+    vaults("goal", "add", "Build robots", "--area", "family")
+    vaults("goal", "log", "robots", "Bought", "a", "kit", "--date", "2026-02-03")
+    vaults("goal", "log", "robots", "First line follower runs")
+
+    note = goal_path(tmp_path, "Build robots").read_text()
+    assert "status: in-progress" in note
+    assert "## Progress\n\n- 2026-02-03 — Bought a kit\n- " in note
+
+    shown = json.loads(vaults("goal", "show", "robots", "--json"))
+    assert shown["status"] == "in-progress"
+    assert [p["text"] for p in shown["progress"]] == [
+        "Bought a kit",
+        "First line follower runs",
+    ]
+
+
+def test_goal_log_dry_run_writes_nothing(vaults, tmp_path):
+    vaults("goal", "add", "Build robots")
+    before = goal_path(tmp_path, "Build robots").read_text()
+    out = vaults("goal", "log", "robots", "Not real", "--dry-run")
+    assert "Not real" in out
+    assert goal_path(tmp_path, "Build robots").read_text() == before
+
+
+def test_goal_status_check_and_milestone(vaults, tmp_path):
+    goal_id = vaults(
+        "goal", "add", "Improve operations", "--milestone", "Payroll"
+    ).split()[0]
+    vaults("goal", "milestone", goal_id, "Map invoice ID")
+    vaults("goal", "check", goal_id, "invoice")
+    vaults("goal", "status", goal_id, "done")
+
+    note = goal_path(tmp_path, "Improve operations").read_text()
+    assert "- [ ] Payroll\n- [x] Map invoice ID" in note
+    assert "status: done" in note
+
+    vaults("goal", "uncheck", goal_id, "invoice")
+    shown = json.loads(vaults("goal", "show", goal_id, "--json"))
+    assert shown["milestones_done"] == 0
+    assert shown["milestones_total"] == 2
+
+
+def test_goal_check_refuses_an_ambiguous_milestone(vaults, capsys):
+    vaults(
+        "goal", "add", "Ops", "--milestone", "Map invoice", "--milestone", "Map stock"
+    )
+    assert ptmutils.main(["goal", "check", "Ops", "Map"]) == 1
+    assert "several milestones" in capsys.readouterr().err
+
+
+def test_goal_lookup_by_title_is_scoped_to_the_year(vaults, capsys):
+    vaults("goal", "add", "Run a marathon", "--year", "last")
+    assert ptmutils.main(["goal", "log", "marathon", "Ran 10k"]) == 1
+    assert "No goal matching" in capsys.readouterr().err
+    vaults("goal", "log", "marathon", "Ran 10k", "--year", "last")
+
+
+def test_goal_lookup_lists_candidates_when_ambiguous(vaults, capsys):
+    vaults("goal", "add", "Plan living abroad")
+    vaults("goal", "add", "Plan the wedding")
+    assert ptmutils.main(["goal", "show", "plan"]) == 1
+    err = capsys.readouterr().err
+    assert "Plan living abroad" in err and "Plan the wedding" in err
+
+
+def test_goals_lists_each_context_with_counts(vaults):
+    vaults("goal", "add", "Ship the platform", "--area", "work", "--milestone", "MVP")
+    vaults("goal", "add", "Live abroad", "-c", "priv", "--area", "family")
+    vaults("goal", "log", "Live abroad", "Visited schools", "--date", "2026-03-14")
+
+    goals = json.loads(vaults("goals", "--all", "--json"))
+    by_title = {g["title"]: g for g in goals}
+    assert by_title["Ship the platform"]["context_slug"] == "nf"
+    assert by_title["Ship the platform"]["milestones_total"] == 1
+    assert by_title["Live abroad"]["status"] == "in-progress"
+    assert by_title["Live abroad"]["last_progress"] == "2026-03-14"
+
+    family = json.loads(vaults("goals", "--all", "--area", "family", "--json"))
+    assert [g["title"] for g in family] == ["Live abroad"]
+
+
+def test_hand_made_goal_notes_are_read_back(vaults, tmp_path):
+    """A note dropped into the year folder by hand, with no frontmatter, lists."""
+    path = goal_path(tmp_path, "Read more books")
+    path.parent.mkdir(parents=True)
+    path.write_text("# Read more books\n\n## Milestones\n- [x] One a month\n")
+
+    goals = json.loads(vaults("goals", "--json"))
+    assert goals[0]["title"] == "Read more books"
+    assert goals[0]["id"] == ""
+    assert goals[0]["status"] == "not-started"
+    assert goals[0]["milestones_done"] == 1
+
+    vaults("goal", "log", "books", "Finished Dune")
+    note = path.read_text()
+    assert note.startswith("---\nstatus: in-progress\n---\n")
+    assert "## Progress\n\n- " in note
+
+
+def test_goal_init_writes_view_and_template_once(vaults, tmp_path):
+    vaults("goal", "init", "--all")
+    template = tmp_path / "priv" / "goals" / "_templates" / "goal.md"
+    assert "{{title}}" in template.read_text()
+    template.write_text("customised")
+
+    out = vaults("goal", "init", "-c", "priv")
+    assert "kept" in out
+    assert template.read_text() == "customised"
+    vaults("goal", "init", "-c", "priv", "--force")
+    assert "{{title}}" in template.read_text()
+
+
+def test_goal_init_dry_run_writes_nothing(vaults, tmp_path):
+    rows = json.loads(vaults("goal", "init", "--all", "--dry-run", "--json"))
+    assert all(row["base"]["written"] for row in rows)
+    assert not (tmp_path / "nf" / "goals").exists()
+
+
+def test_goal_template_is_not_read_as_a_goal(vaults):
+    vaults("goal", "init")
+    assert json.loads(vaults("goals", "--json")) == []

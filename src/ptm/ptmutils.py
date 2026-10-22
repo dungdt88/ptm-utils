@@ -3,7 +3,8 @@
 
 One vault per context, one Markdown page per month inside it. Notes are appended
 to a dated log; checklist items live in a single Tasks section so the month's
-open work is visible in one place.
+open work is visible in one place. Yearly goals live beside the months, one note
+per goal, in a folder per year.
 
 See ``specs.md`` next to this file for the page-format contract.
 """
@@ -16,7 +17,7 @@ import json
 import os
 import re
 import sys
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional, Tuple
@@ -32,6 +33,7 @@ PAGE_TYPE = "ptm-month"
 TASKS_HEADING = "## Tasks"
 LOG_HEADING = "## Log"
 DEFAULT_NOTES_DIR = "notes"
+DEFAULT_GOALS_DIR = "goals"
 DEFAULT_CONFIG_DIR = Path(os.environ.get("XDG_CONFIG_HOME", "~/.config")) / "ptm"
 
 TASK_RE = re.compile(r"^(?P<indent>[ \t]*)- \[(?P<box>.)\] (?P<rest>.*)$")
@@ -39,6 +41,18 @@ FIELD_RE = re.compile(r"\[(?P<key>[A-Za-z_][\w-]*)::\s*(?P<value>[^\]]*)\]")
 DAY_RE = re.compile(r"^### (?P<date>\d{4}-\d{2}-\d{2})\b")
 ENTRY_RE = re.compile(r"^#### (?P<time>\d{1,2}:\d{2})\s+[—–-]\s+(?P<title>.+)$")
 MONTH_RE = re.compile(r"^\d{4}-(0[1-9]|1[0-2])$")
+YEAR_RE = re.compile(r"^\d{4}$")
+
+GOAL_TYPE = "ptm-goal"
+GOAL_STATUSES = ("not-started", "in-progress", "done")
+GOAL_TEMPLATE = Path("_templates") / "goal.md"
+DESCRIPTION_HEADING = "## Description"
+MILESTONES_HEADING = "## Milestones"
+PROGRESS_HEADING = "## Progress"
+PROGRESS_RE = re.compile(r"^- (?P<date>\d{4}-\d{2}-\d{2})\s+[—–-]\s+(?P<text>.+)$")
+# Characters Obsidian refuses in a file name, plus those that break [[links]].
+UNSAFE_TITLE_RE = re.compile(r'[\\/:*?"<>|#^\[\]]')
+PLAIN_YAML_RE = re.compile(r"^[\w][\w .-]*$")
 
 # Obsidian renders `[>]` as "forwarded"; Dataview does not count it as complete.
 BOX_OPEN = " "
@@ -63,6 +77,7 @@ class Context:
     name: str
     vault: Path
     notes_dir: str = DEFAULT_NOTES_DIR
+    goals_dir: str = DEFAULT_GOALS_DIR
 
     @property
     def notes_path(self) -> Path:
@@ -71,12 +86,23 @@ class Context:
     def page_path(self, month: str) -> Path:
         return self.notes_path / f"{month}.md"
 
+    @property
+    def goals_path(self) -> Path:
+        return self.vault / self.goals_dir
+
+    def goal_year_path(self, year: str) -> Path:
+        return self.goals_path / year
+
+    def goal_base_path(self, year: str) -> Path:
+        return self.goals_path / f"{year}.base"
+
     def as_dict(self) -> dict:
         return {
             "slug": self.slug,
             "name": self.name,
             "vault": str(self.vault),
             "notes_dir": self.notes_dir,
+            "goals_dir": self.goals_dir,
         }
 
 
@@ -126,6 +152,11 @@ class Config:
                         if ctx.notes_dir != DEFAULT_NOTES_DIR
                         else {}
                     ),
+                    **(
+                        {"goals_dir": ctx.goals_dir}
+                        if ctx.goals_dir != DEFAULT_GOALS_DIR
+                        else {}
+                    ),
                 }
                 for slug, ctx in sorted(self.contexts.items())
             },
@@ -167,6 +198,7 @@ def load_config() -> Config:
     contexts: Dict[str, Context] = {}
     default_context = os.environ.get("PTM_DEFAULT_CONTEXT")
     notes_dir_default = os.environ.get("PTM_NOTES_DIR", DEFAULT_NOTES_DIR)
+    goals_dir_default = os.environ.get("PTM_GOALS_DIR", DEFAULT_GOALS_DIR)
 
     if config_path.is_file():
         raw = yaml.safe_load(config_path.read_text(encoding="utf-8")) or {}
@@ -181,6 +213,7 @@ def load_config() -> Config:
                 name=entry.get("name") or slug,
                 vault=Path(str(vault)).expanduser(),
                 notes_dir=entry.get("notes_dir", notes_dir_default),
+                goals_dir=entry.get("goals_dir", goals_dir_default),
             )
 
     if default_context and default_context.lower() not in contexts:
@@ -237,6 +270,22 @@ def parse_month(value: Optional[str], anchor: Optional[date] = None) -> str:
     if MONTH_RE.fullmatch(value):
         return value
     raise PtmError(f"Cannot read '{value}' as a month (use YYYY-MM).")
+
+
+def parse_year(value: Optional[str]) -> str:
+    """Accept YYYY, this/current, last/prev, next, or a +/-N year offset."""
+    current = date.today().year
+    if not value or value in ("this", "current"):
+        return str(current)
+    if value in ("last", "prev", "previous"):
+        return str(current - 1)
+    if value == "next":
+        return str(current + 1)
+    if re.fullmatch(r"[+-]\d+", value):
+        return str(current + int(value))
+    if YEAR_RE.fullmatch(value):
+        return value
+    raise PtmError(f"Cannot read '{value}' as a year (use YYYY).")
 
 
 def month_bounds(month: str) -> Tuple[date, date]:
@@ -464,6 +513,174 @@ def months_between(ctx: Context, since: date, until: date) -> List[str]:
 
 
 # --------------------------------------------------------------------------- #
+# Goal model
+# --------------------------------------------------------------------------- #
+
+
+@dataclass
+class Milestone:
+    text: str
+    done: bool
+
+
+@dataclass
+class Progress:
+    date: str
+    text: str
+
+
+@dataclass
+class Goal:
+    id: str
+    title: str
+    status: str
+    area: str
+    created: str
+    year: str
+    context: str
+    context_slug: str
+    path: Path
+    description: str
+    milestones: List[Milestone]
+    progress: List[Progress]
+
+    @property
+    def last_progress(self) -> Optional[str]:
+        return max((entry.date for entry in self.progress), default=None)
+
+    def as_dict(self, detail: bool = False) -> dict:
+        summary = {
+            "id": self.id,
+            "title": self.title,
+            "status": self.status,
+            "area": self.area,
+            "created": self.created,
+            "year": self.year,
+            "context": self.context,
+            "context_slug": self.context_slug,
+            "path": str(self.path),
+            "milestones_done": sum(1 for m in self.milestones if m.done),
+            "milestones_total": len(self.milestones),
+            "last_progress": self.last_progress,
+        }
+        if not detail:
+            return summary
+        return {
+            **summary,
+            "description": self.description,
+            "milestones": [asdict(m) for m in self.milestones],
+            "progress": [asdict(p) for p in self.progress],
+        }
+
+
+def frontmatter_span(lines: List[str]) -> Tuple[int, int]:
+    """Return [start, end) of the frontmatter's body, or ``(-1, -1)`` if absent."""
+    if not lines or lines[0].strip() != "---":
+        return -1, -1
+    for index in range(1, len(lines)):
+        if lines[index].strip() == "---":
+            return 1, index
+    return -1, -1
+
+
+def read_frontmatter(lines: List[str]) -> Dict[str, str]:
+    """Frontmatter as strings; unreadable YAML reads as empty, never as an error."""
+    start, end = frontmatter_span(lines)
+    if start < 0:
+        return {}
+    try:
+        data = yaml.safe_load("\n".join(lines[start:end]))
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        str(key): ", ".join(map(str, value)) if isinstance(value, list) else str(value)
+        for key, value in data.items()
+        if value is not None
+    }
+
+
+def section_body(lines: List[str], heading: str) -> List[str]:
+    start, end = section_span(lines, heading)
+    return lines[start:end] if start >= 0 else []
+
+
+def read_goal(ctx: Context, year: str, path: Path) -> Goal:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    meta = read_frontmatter(lines)
+    milestones = [
+        Milestone(text=match.group("rest").strip(), done=match.group("box") in "xX")
+        for match in map(TASK_RE.match, section_body(lines, MILESTONES_HEADING))
+        if match and match.group("rest").strip()
+    ]
+    progress = [
+        Progress(date=match.group("date"), text=match.group("text").strip())
+        for match in map(PROGRESS_RE.match, section_body(lines, PROGRESS_HEADING))
+        if match
+    ]
+    return Goal(
+        id=meta.get("id", ""),
+        title=path.stem,
+        status=meta.get("status") or GOAL_STATUSES[0],
+        area=meta.get("area", ""),
+        created=meta.get("created", ""),
+        year=year,
+        context=ctx.name,
+        context_slug=ctx.slug,
+        path=path,
+        description="\n".join(section_body(lines, DESCRIPTION_HEADING)).strip(),
+        milestones=milestones,
+        progress=progress,
+    )
+
+
+def goal_years(ctx: Context) -> List[str]:
+    if not ctx.goals_path.is_dir():
+        return []
+    return sorted(
+        p.name for p in ctx.goals_path.iterdir() if p.is_dir() and YEAR_RE.match(p.name)
+    )
+
+
+def read_goals(ctx: Context, year: str) -> List[Goal]:
+    folder = ctx.goal_year_path(year)
+    if not folder.is_dir():
+        return []
+    goals = [read_goal(ctx, year, path) for path in folder.glob("*.md")]
+    return sorted(goals, key=lambda goal: goal.title.lower())
+
+
+def find_goal(
+    config: Config, query: str, slug: Optional[str], year_value: Optional[str]
+) -> Goal:
+    """Resolve a goal by id in any year, else by title within ``year_value``."""
+    contexts = config.selection(slug, slug is None)
+    for ctx in contexts:
+        for year in goal_years(ctx):
+            for goal in read_goals(ctx, year):
+                if goal.id and goal.id == query:
+                    return goal
+
+    year = parse_year(year_value)
+    candidates = [goal for ctx in contexts for goal in read_goals(ctx, year)]
+    needle = query.strip().lower()
+    matches = [g for g in candidates if g.title.lower() == needle] or [
+        g for g in candidates if needle in g.title.lower()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise PtmError(f"No goal matching '{query}' in {year}.")
+    listing = "\n".join(
+        f"  {g.id or '-':<7}  {g.title}  ({g.context} {g.year})" for g in matches
+    )
+    raise PtmError(
+        f"'{query}' matches several goals; use an id or more of the title:\n{listing}"
+    )
+
+
+# --------------------------------------------------------------------------- #
 # Writing
 # --------------------------------------------------------------------------- #
 
@@ -483,26 +700,42 @@ def edit_page(path: Path, mutate) -> None:
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
-def make_task_id(ctx: Context, month: str, text: str, taken: Iterable[str]) -> str:
-    seed = f"{ctx.slug}/{month}/{text}/{datetime.now().isoformat()}"
+def make_id(prefix: str, seed: str, taken: Iterable[str]) -> str:
+    seed = f"{seed}/{datetime.now().isoformat()}"
     taken = set(taken)
     for attempt in range(1000):
         digest = hashlib.sha1(f"{seed}/{attempt}".encode()).hexdigest()[:5]
-        candidate = f"t-{digest}"
+        candidate = f"{prefix}-{digest}"
         if candidate not in taken:
             return candidate
-    raise PtmError("Could not allocate a unique task id.")
+    raise PtmError("Could not allocate a unique id.")
 
 
-def insert_task_line(lines: List[str], line: str) -> List[str]:
-    start, end = section_span(lines, TASKS_HEADING)
+def make_task_id(ctx: Context, month: str, text: str, taken: Iterable[str]) -> str:
+    return make_id("t", f"{ctx.slug}/{month}/{text}", taken)
+
+
+def append_to_section(lines: List[str], heading: str, line: str) -> List[str]:
+    """Add ``line`` after a section's last non-blank line, creating the section."""
+    start, end = section_span(lines, heading)
     if start < 0:
-        lines = lines + ["", TASKS_HEADING, "", line]
-        return lines
+        return lines + ["", heading, "", line]
     cursor = end
     while cursor > start and not lines[cursor - 1].strip():
         cursor -= 1
     return lines[:cursor] + [line] + lines[cursor:]
+
+
+def insert_task_line(lines: List[str], line: str) -> List[str]:
+    return append_to_section(lines, TASKS_HEADING, line)
+
+
+def append_goal_line(lines: List[str], heading: str, line: str) -> List[str]:
+    """Append to a goal section, keeping the blank line under its heading."""
+    start, end = section_span(lines, heading)
+    if start >= 0 and not any(text.strip() for text in lines[start:end]):
+        return lines[:start] + ["", line] + lines[start:]
+    return append_to_section(lines, heading, line)
 
 
 def insert_note_block(lines: List[str], day: date, block: List[str]) -> List[str]:
@@ -548,6 +781,100 @@ def render_note_block(
         block.extend(["", "**Details**"])
         block.extend(f"- {d}" for d in details)
     return block
+
+
+def set_frontmatter_value(lines: List[str], key: str, value: str) -> List[str]:
+    """Rewrite one ``key:`` line in place, leaving every other property as typed."""
+    entry = f"{key}: {value}"
+    start, end = frontmatter_span(lines)
+    if start < 0:
+        return ["---", entry, "---", ""] + lines
+    for index in range(start, end):
+        if re.match(rf"{re.escape(key)}\s*:", lines[index]):
+            lines[index] = entry
+            return lines
+    return lines[:end] + [entry] + lines[end:]
+
+
+def yaml_scalar(value: str) -> str:
+    # A JSON string is valid YAML, so it safely quotes anything with a colon or #.
+    return (
+        value if PLAIN_YAML_RE.match(value) else json.dumps(value, ensure_ascii=False)
+    )
+
+
+def goal_title(text: str) -> str:
+    title = " ".join(UNSAFE_TITLE_RE.sub("", text).split()).lstrip(".")
+    if not title:
+        raise PtmError("A goal needs a title Obsidian can use as a file name.")
+    return title
+
+
+def render_goal_note(
+    properties: List[Tuple[str, str]],
+    title: str,
+    description: str = "",
+    milestones: Iterable[str] = (),
+) -> str:
+    lines = ["---", f"type: {GOAL_TYPE}"]
+    lines += [f"{key}: {value}".rstrip() for key, value in properties]
+    lines += ["tags: [ptm]", "---", "", f"# {title}", "", DESCRIPTION_HEADING, ""]
+    if description.strip():
+        lines += [description.strip(), ""]
+    lines += [MILESTONES_HEADING, ""]
+    milestone_lines = [f"- [ ] {text}" for text in milestones]
+    if milestone_lines:
+        lines += milestone_lines + [""]
+    lines += [PROGRESS_HEADING, ""]
+    return "\n".join(lines)
+
+
+GOAL_BASE = """filters:
+  and:
+    - file.inFolder("{folder}")
+properties:
+  note.status:
+    displayName: Status
+  note.area:
+    displayName: Area
+  file.mtime:
+    displayName: Last edited
+views:
+  - type: table
+    name: Goals
+    order:
+      - file.name
+      - note.status
+      - note.area
+      - file.mtime
+  - type: table
+    name: By status
+    groupBy:
+      property: note.status
+      direction: ASC
+    order:
+      - file.name
+      - note.area
+      - file.mtime
+"""
+
+
+def goal_base(ctx: Context, year: str) -> str:
+    return GOAL_BASE.format(folder=f"{ctx.goals_dir}/{year}")
+
+
+GOAL_NOTE_TEMPLATE = render_goal_note(
+    [("status", GOAL_STATUSES[0]), ("area", ""), ("created", "{{date:YYYY-MM-DD}}")],
+    "{{title}}",
+)
+
+
+def write_unless_present(path: Path, text: str, force: bool) -> bool:
+    if path.exists() and not force:
+        return False
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(text, encoding="utf-8")
+    return True
 
 
 def read_body(args) -> str:
@@ -600,7 +927,8 @@ tags: [ptm]
 
 # {name}
 
-Open this vault in Obsidian and install the **Dataview** plugin.
+Open this vault in Obsidian and install the **Dataview** plugin. The yearly
+goal tables in `{goals}/YYYY.base` need no plugin — Bases is built in.
 
 ## Open tasks, this month
 
@@ -634,6 +962,16 @@ FROM "{notes}"
 WHERE type = "ptm-month"
 SORT month DESC
 ```
+
+## Goals this year
+
+```dataview
+TABLE WITHOUT ID file.link AS Goal, status AS Status, area AS Area,
+  length(filter(file.tasks, (t) => t.completed)) + "/" + length(file.tasks) AS Milestones
+FROM "{goals}"
+WHERE file.folder = "{goals}/" + dateformat(date(today), "yyyy")
+SORT status ASC
+```
 """
 
 
@@ -645,7 +983,10 @@ def cmd_init(args, config: Config) -> int:
         dashboard = ctx.vault / "_ptm_dashboard.md"
         if not dashboard.exists() or args.force:
             dashboard.write_text(
-                DASHBOARD.format(name=ctx.name, notes=ctx.notes_dir), encoding="utf-8"
+                DASHBOARD.format(
+                    name=ctx.name, notes=ctx.notes_dir, goals=ctx.goals_dir
+                ),
+                encoding="utf-8",
             )
             note = "written"
         else:
@@ -665,6 +1006,7 @@ def cmd_context(args, config: Config) -> int:
             name=args.name or args.slug,
             vault=vault,
             notes_dir=args.notes_dir,
+            goals_dir=args.goals_dir,
         )
         if args.default or not config.default_context:
             config.default_context = slug
@@ -743,6 +1085,8 @@ def cmd_vault(args, config: Config) -> int:
                 **ctx.as_dict(),
                 "exists": ctx.vault.is_dir(),
                 "notes_path": str(ctx.notes_path),
+                "goals_path": str(ctx.goals_path),
+                "goal_years": goal_years(ctx),
                 "months": months,
                 "notes": sum(len(read_notes(ctx, m)) for m in months),
                 "tasks_total": len(tasks),
@@ -758,6 +1102,10 @@ def cmd_vault(args, config: Config) -> int:
                 f"Vault:    {row['vault']}{'' if row['exists'] else '  (does not exist yet)'}"
             )
             print(f"Notes:    {row['notes_path']}")
+            print(
+                f"Goals:    {row['goals_path']}"
+                + (f"  ({', '.join(row['goal_years'])})" if row["goal_years"] else "")
+            )
             print(
                 f"Months:   {len(row['months'])}"
                 + (
@@ -1181,6 +1529,253 @@ def cmd_rollover(args, config: Config) -> int:
     return 0
 
 
+def cmd_goal_init(args, config: Config) -> int:
+    year = parse_year(args.year)
+    report = []
+    for ctx in config.selection(args.context, args.all):
+        files = {
+            "base": (ctx.goal_base_path(year), goal_base(ctx, year)),
+            "template": (ctx.goals_path / GOAL_TEMPLATE, GOAL_NOTE_TEMPLATE),
+        }
+        row = {
+            "context": ctx.name,
+            "context_slug": ctx.slug,
+            "year": year,
+            "folder": str(ctx.goal_year_path(year)),
+        }
+        for name, (path, text) in files.items():
+            if args.dry_run:
+                written = args.force or not path.exists()
+            else:
+                written = write_unless_present(path, text, args.force)
+            row[name] = {"path": str(path), "written": written}
+        if not args.dry_run:
+            ctx.goal_year_path(year).mkdir(parents=True, exist_ok=True)
+        report.append(row)
+
+    def render(rows):
+        for row in rows:
+            print(f"{row['context_slug']}: goals {row['year']}")
+            print(f"  folder    {row['folder']}")
+            for name in ("base", "template"):
+                verb = "would write" if args.dry_run else "written"
+                state = (
+                    verb if row[name]["written"] else "kept (use --force to restore)"
+                )
+                print(f"  {name:<9} {row[name]['path']} — {state}")
+
+    emit(report, args.json, render)
+    return 0
+
+
+def cmd_goal_add(args, config: Config) -> int:
+    ctx = config.resolve(args.context)
+    year = parse_year(args.year)
+    title = goal_title(" ".join(args.title))
+    path = ctx.goal_year_path(year) / f"{title}.md"
+    if path.exists():
+        raise PtmError(f"A goal named '{title}' already exists in {year}: {path}")
+
+    taken = {g.id for y in goal_years(ctx) for g in read_goals(ctx, y)}
+    goal_id = make_id("g", f"{ctx.slug}/{year}/{title}", taken)
+    created = parse_date(args.date).isoformat()
+    area = (args.area or "").strip()
+    description = sys.stdin.read() if args.description == "-" else args.description
+    markdown = render_goal_note(
+        [
+            ("id", goal_id),
+            ("status", args.status),
+            ("area", yaml_scalar(area) if area else ""),
+            ("created", created),
+        ],
+        title,
+        description or "",
+        args.milestone or [],
+    )
+    payload = {
+        "id": goal_id,
+        "title": title,
+        "status": args.status,
+        "area": area,
+        "created": created,
+        "year": year,
+        "context": ctx.name,
+        "context_slug": ctx.slug,
+        "path": str(path),
+        "markdown": markdown,
+    }
+
+    if args.dry_run:
+        emit(payload, args.json, lambda p: print(p["markdown"], end=""))
+        return 0
+
+    write_unless_present(ctx.goal_base_path(year), goal_base(ctx, year), force=False)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(path, "x", encoding="utf-8") as handle:
+            handle.write(markdown)
+    except FileExistsError as exc:
+        raise PtmError(f"A goal named '{title}' already exists in {year}.") from exc
+    emit(
+        payload,
+        args.json,
+        lambda p: print(
+            f"{p['id']}  {p['title']}  ({p['context']} {p['year']})\n  {p['path']}"
+        ),
+    )
+    return 0
+
+
+def cmd_goal_show(args, config: Config) -> int:
+    goal = find_goal(config, args.goal, args.context, args.year)
+    emit(
+        goal.as_dict(detail=True),
+        args.json,
+        lambda _: print(goal.path.read_text(encoding="utf-8"), end=""),
+    )
+    return 0
+
+
+def report_goal_change(args, goal: Goal, payload: dict, mutate, summary: str) -> int:
+    """Shared tail of the goal write commands: dry-run, write, report."""
+    payload = {**goal.as_dict(), **payload}
+    if args.dry_run:
+        emit(payload, args.json, lambda p: print(p.get("markdown", summary)))
+        return 0
+    edit_page(goal.path, mutate)
+    emit(payload, args.json, lambda p: print(summary))
+    return 0
+
+
+def cmd_goal_log(args, config: Config) -> int:
+    goal = find_goal(config, args.goal, args.context, args.year)
+    text = " ".join(" ".join(args.text).split())
+    if not text:
+        raise PtmError("A progress entry needs some text.")
+    day = parse_date(args.date).isoformat()
+    line = f"- {day} — {text}"
+    starts_goal = goal.status == "not-started"
+    status = "in-progress" if starts_goal else goal.status
+
+    def mutate(lines: List[str]) -> List[str]:
+        lines = append_goal_line(lines, PROGRESS_HEADING, line)
+        return set_frontmatter_value(lines, "status", status) if starts_goal else lines
+
+    summary = f"{goal.id or '-'}  {goal.title}: {day} — {text}"
+    if starts_goal:
+        summary += "\n  status: not-started → in-progress"
+    payload = {"status": status, "date": day, "text": text, "markdown": line}
+    return report_goal_change(args, goal, payload, mutate, summary)
+
+
+def cmd_goal_status(args, config: Config) -> int:
+    goal = find_goal(config, args.goal, args.context, args.year)
+    summary = f"{goal.id or '-'}  {goal.title}: {goal.status} → {args.status}"
+    return report_goal_change(
+        args,
+        goal,
+        {"status": args.status, "previous_status": goal.status},
+        lambda lines: set_frontmatter_value(lines, "status", args.status),
+        summary,
+    )
+
+
+def cmd_goal_milestone(args, config: Config) -> int:
+    goal = find_goal(config, args.goal, args.context, args.year)
+    text = " ".join(" ".join(args.text).split())
+    if not text:
+        raise PtmError("A milestone needs some text.")
+    line = f"- [ ] {text}"
+    return report_goal_change(
+        args,
+        goal,
+        {"milestone": text, "markdown": line},
+        lambda lines: append_goal_line(lines, MILESTONES_HEADING, line),
+        f"{goal.id or '-'}  {goal.title}: + {text}",
+    )
+
+
+def find_milestone(goal: Goal, query: str) -> Milestone:
+    needle = query.strip().lower()
+    matches = [m for m in goal.milestones if m.text.lower() == needle] or [
+        m for m in goal.milestones if needle in m.text.lower()
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    if not matches:
+        raise PtmError(f"No milestone matching '{query}' in '{goal.title}'.")
+    listing = "\n".join(f"  {m.text}" for m in matches)
+    raise PtmError(f"'{query}' matches several milestones:\n{listing}")
+
+
+def set_milestone(args, config: Config, done: bool) -> int:
+    goal = find_goal(config, args.goal, args.context, args.year)
+    milestone = find_milestone(goal, " ".join(args.milestone))
+    box = BOX_DONE if done else BOX_OPEN
+
+    def mutate(lines: List[str]) -> List[str]:
+        start, end = section_span(lines, MILESTONES_HEADING)
+        for index in range(max(start, 0), max(end, 0)):
+            match = TASK_RE.match(lines[index])
+            if match and match.group("rest").strip() == milestone.text:
+                lines[index] = f"{match.group('indent')}- [{box}] {match.group('rest')}"
+                return lines
+        raise PtmError(f"Milestone '{milestone.text}' changed on disk; try again.")
+
+    mark = "[x]" if done else "[ ]"
+    return report_goal_change(
+        args,
+        goal,
+        {"milestone": milestone.text, "done": done},
+        mutate,
+        f"{goal.id or '-'}  {goal.title}: {mark} {milestone.text}",
+    )
+
+
+def cmd_goal_check(args, config: Config) -> int:
+    return set_milestone(args, config, done=True)
+
+
+def cmd_goal_uncheck(args, config: Config) -> int:
+    return set_milestone(args, config, done=False)
+
+
+def cmd_goals(args, config: Config) -> int:
+    year = parse_year(args.year)
+    goals = [
+        g
+        for ctx in config.selection(args.context, args.all)
+        for g in read_goals(ctx, year)
+    ]
+    if args.status:
+        goals = [g for g in goals if g.status == args.status]
+    if args.area:
+        goals = [g for g in goals if g.area.lower() == args.area.lower()]
+
+    def render(_):
+        if not goals:
+            print(f"No goals for {year}.")
+            return
+        by_context: Dict[str, List[Goal]] = {}
+        for goal in goals:
+            by_context.setdefault(goal.context, []).append(goal)
+        for name, group in by_context.items():
+            print(f"[{name}] {year} ({len(group)})")
+            for goal in group:
+                extras = [goal.area] if goal.area else []
+                if goal.milestones:
+                    done = sum(1 for m in goal.milestones if m.done)
+                    extras.append(f"{done}/{len(goal.milestones)}")
+                if goal.last_progress:
+                    extras.append(f"last {goal.last_progress}")
+                suffix = f"  ({', '.join(extras)})" if extras else ""
+                print(f"  {goal.id or '-':<7} {goal.status:<11} {goal.title}{suffix}")
+            print()
+
+    emit([g.as_dict() for g in goals], args.json, render)
+    return 0
+
+
 # --------------------------------------------------------------------------- #
 # CLI
 # --------------------------------------------------------------------------- #
@@ -1228,6 +1823,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--notes-dir",
         default=DEFAULT_NOTES_DIR,
         help="Month pages folder inside the vault",
+    )
+    add.add_argument(
+        "--goals-dir",
+        default=DEFAULT_GOALS_DIR,
+        help="Goals folder inside the vault",
     )
     add.add_argument(
         "--default", action="store_true", help="Make this the default context"
@@ -1329,6 +1929,87 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_rollover)
+
+    year_help = "YYYY, this, last, next, or +/-N (default: this year)"
+
+    p = sub.add_parser(
+        "goal", help="Yearly goals: one note per goal, a folder per year"
+    )
+    gsub = p.add_subparsers(dest="goal_command", required=True)
+
+    def goal_parser(name: str, help_text: str, func) -> argparse.ArgumentParser:
+        parser = gsub.add_parser(name, help=help_text)
+        parser.set_defaults(func=func)
+        return parser
+
+    def add_goal_target(parser: argparse.ArgumentParser) -> None:
+        parser.add_argument("goal", help="Goal id, or its title or part of it")
+        add_context_flags(parser, allow_all=False)
+        parser.add_argument("--year", help=f"Year to match titles in; {year_help}")
+
+    g = goal_parser(
+        "init", "Create a year's goals folder, table view and template", cmd_goal_init
+    )
+    add_context_flags(g)
+    g.add_argument("--year", help=year_help)
+    g.add_argument(
+        "--force", action="store_true", help="Overwrite the view and the template"
+    )
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--json", action="store_true")
+
+    g = goal_parser("add", "Create a goal note", cmd_goal_add)
+    g.add_argument("title", nargs="+")
+    add_context_flags(g, allow_all=False)
+    g.add_argument("--area", help="One label, e.g. family or mika")
+    g.add_argument("--description", help="Description Markdown; '-' reads stdin")
+    g.add_argument("--milestone", action="append", help="A milestone; repeatable")
+    g.add_argument("--status", choices=GOAL_STATUSES, default=GOAL_STATUSES[0])
+    g.add_argument("--year", help=year_help)
+    g.add_argument("--date", help="Created date (default: today)")
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--json", action="store_true")
+
+    g = goal_parser("show", "Print a goal note", cmd_goal_show)
+    add_goal_target(g)
+    g.add_argument("--json", action="store_true")
+
+    g = goal_parser("log", "Append a dated progress entry", cmd_goal_log)
+    add_goal_target(g)
+    g.add_argument("text", nargs="+")
+    g.add_argument("--date", help="YYYY-MM-DD, today, yesterday, or -N")
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--json", action="store_true")
+
+    g = goal_parser("status", "Set a goal's status", cmd_goal_status)
+    add_goal_target(g)
+    g.add_argument("status", choices=GOAL_STATUSES)
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--json", action="store_true")
+
+    g = goal_parser("milestone", "Add a milestone to a goal", cmd_goal_milestone)
+    add_goal_target(g)
+    g.add_argument("text", nargs="+")
+    g.add_argument("--dry-run", action="store_true")
+    g.add_argument("--json", action="store_true")
+
+    for name, func, verb in (
+        ("check", cmd_goal_check, "Tick"),
+        ("uncheck", cmd_goal_uncheck, "Untick"),
+    ):
+        g = goal_parser(name, f"{verb} a milestone, matched by its text", func)
+        add_goal_target(g)
+        g.add_argument("milestone", nargs="+", help="The milestone text, or part of it")
+        g.add_argument("--dry-run", action="store_true")
+        g.add_argument("--json", action="store_true")
+
+    p = sub.add_parser("goals", help="List a year's goals")
+    add_context_flags(p)
+    p.add_argument("--year", help=year_help)
+    p.add_argument("--status", choices=GOAL_STATUSES)
+    p.add_argument("--area")
+    p.add_argument("--json", action="store_true")
+    p.set_defaults(func=cmd_goals)
 
     return parser
 

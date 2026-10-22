@@ -14,9 +14,13 @@ A **context** is a stream of work. Each one is its own Obsidian vault:
 ~/Documents/vaults/
 ├── work/                      # context: work
 │   ├── _ptm_dashboard.md
-│   └── notes/
-│       ├── 2026-08.md
-│       └── 2026-07.md
+│   ├── notes/
+│   │   ├── 2026-08.md
+│   │   └── 2026-07.md
+│   └── goals/
+│       ├── 2026.base          # the year's goal table
+│       ├── 2026/              # one note per goal
+│       └── _templates/goal.md
 └── personal/                  # context: priv
     ├── _ptm_dashboard.md
     └── notes/
@@ -27,9 +31,10 @@ They are separate vaults, not folders, because you open them as separate
 Obsidian workspaces and probably sync them to different places. `ptmutils`
 bridges them: `--all` reads across every registered context in one command.
 
-`ptmutils` owns exactly two things in a vault — `notes/*.md` files named
-`YYYY-MM.md`, and `_ptm_dashboard.md`. **Everything else is yours** and is never
-read or written. Put your meeting notes, references and daily notes wherever you
+`ptmutils` owns three things in a vault — `notes/*.md` files named
+`YYYY-MM.md`, `_ptm_dashboard.md`, and the `goals/` folder (see
+[Yearly goals](#yearly-goals)). **Everything else is yours** and is never read
+or written. Put your meeting notes, references and daily notes wherever you
 like.
 
 ## The month page
@@ -127,8 +132,8 @@ Hand-editing is expected, not tolerated:
 - Reword a task, add fields, reorder lines → all fine.
 - Anything the parser doesn't recognise is ignored, never rewritten.
 
-The CLI only ever modifies an existing line for `done`, `undone` and `rollover`.
-Everything else appends.
+On a month page the CLI only ever modifies an existing line for `done`,
+`undone` and `rollover`. Everything else appends.
 
 ## The dashboard
 
@@ -141,6 +146,7 @@ Obsidian. It needs the **Dataview** plugin.
 | Open tasks with a due date | The subset that has a deadline |
 | Everything done | Completed tasks, most recent first |
 | Month pages | Every page in the vault, newest month first |
+| Goals this year | This year's goals with status, area and milestones done (`2/5`) |
 
 The dashboard is yours once written — `init` will not overwrite your edits;
 `init --force` restores the shipped version.
@@ -159,6 +165,100 @@ TASK FROM "notes"
 WHERE !completed AND prio = "high"
 ```
 ````
+
+## Yearly goals
+
+A year's plan — usually under ten resolutions — is the Obsidian take on a Notion
+database: **one note per goal** in a folder per year, and a **Bases** table over
+the folder. Bases is a core Obsidian plugin (Settings → Core plugins → Bases), so
+the table needs nothing installed.
+
+| Notion | Obsidian |
+| --- | --- |
+| The year's database | `goals/2026/` plus the `goals/2026.base` table |
+| A row's page | `goals/2026/Plan for living abroad.md` |
+| Status | `status:` property — `not-started`, `in-progress`, `done` |
+| Tags | `area:` property — one label, e.g. `family`, `mika` |
+| The page description | `## Description` |
+| The checklist in the page | `## Milestones` |
+| Comments | `## Progress` — one dated line per update |
+| Comment count | the table's **Last edited** column (`file.mtime`) |
+
+Each vault keeps its own goals: work goals in the work vault, personal ones in
+the personal vault.
+
+### A goal note
+
+```markdown
+---
+type: ptm-goal
+id: g-4be07
+status: in-progress
+area: mika
+created: 2025-12-30
+tags: [ptm]
+---
+
+# Improve operation and productivity
+
+## Description
+
+- Apply CMS webapp to improve productivity
+- Make operation more standard so it can be delegated
+
+## Milestones
+
+- [ ] Salary & payroll management
+- [x] Map customer payments to SAPO order ids
+
+## Progress
+
+- 2025-12-30 — Plan written
+- 2026-03-14 — Payment ↔ SAPO mapping live
+```
+
+### Working in Obsidian only
+
+Everything works without the CLI:
+
+1. **Start the year** — run `ptmutils goal init --year 2027` once per vault, or
+   create `goals/2027/` and copy last year's `.base`, changing the folder in its
+   `file.inFolder(...)` filter.
+2. **Point the Templates core plugin** at `goals/_templates` (Settings →
+   Templates → Template folder location). Create a note in `goals/2027/`, run
+   *Templates: Insert template* → `goal`, and the skeleton fills in with the
+   title and today's date.
+3. **Open `goals/2027.base`.** The *Goals* view lists every goal; *By status*
+   groups them. Click a status cell to change it; click a title to open the note.
+4. **Record progress** by adding a line at the end of `## Progress`:
+   `- 2027-03-14 — what happened`. Tick milestones as you go.
+
+To make the table the first thing you see, embed it in any note with
+`![[goals/2027.base]]`.
+
+### From the terminal
+
+```bash
+ptmutils goal add "Plan for living abroad" -c priv --area family --year next
+ptmutils goal log abroad "Shortlisted three cities"
+ptmutils goal check abroad "visa"
+ptmutils goals --all
+```
+
+See [`ptmutils.md`](./ptmutils.md#goal--yearly-goals) for every option.
+
+### Rules worth knowing
+
+- **The folder is the year.** Every `.md` directly in `goals/2026/` is a 2026
+  goal, with or without frontmatter — the same set the table shows.
+- **The file name is the title.** Rename the note in Obsidian to rename the goal.
+- **Progress lines stay in shape** `- YYYY-MM-DD — text` so the CLI can read
+  them back; anything else in the section is kept but not parsed.
+- **A new year starts fresh.** Nothing is carried over automatically; add the
+  goals you want to keep into the new year's folder.
+- The CLI edits a goal's `status:` line and milestone checkboxes, and appends to
+  `## Milestones` and `## Progress`. It never rewrites the rest, and never
+  overwrites a `.base` or the template you have customised.
 
 ## Syncing
 
